@@ -1,0 +1,7 @@
+[
+  { "ParameterKey": "ProjectName", "ParameterValue": "trupick-next" },
+  { "ParameterKey": "ContainerPort", "ParameterValue": "3000" },
+  { "ParameterKey": "DesiredCount", "ParameterValue": "0" },
+  { "ParameterKey": "HealthCheckPath", "ParameterValue": "/api/health" },
+  { "ParameterKey": "VpcCidr", "ParameterValue": "10.0.0.0/16" }
+]
