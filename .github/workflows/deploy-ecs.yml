@@ -1,4 +1,4 @@
-name: Deploy to ECS
+name: Build & Deploy to ECS
 
 on:
   push:
@@ -13,27 +13,33 @@ permissions:
   contents: read
   id-token: write
 
+env:
+  AWS_REGION: ap-south-1
+  ECR_REPOSITORY: trupick-next
+  ECS_CLUSTER: trupick-next-cluster
+  ECS_SERVICE: trupick-next-service
+  TASK_DEF_FILE: ecs-task-def.json
+  LOG_GROUP: /ecs/trupick-next
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
-    env:
-      AWS_REGION: ap-south-1
-      ECR_REPOSITORY: trupick-next
-      ECS_CLUSTER: trupick-next-cluster
-      ECS_SERVICE: trupick-next-service
-      TASK_DEF_FILE: ecs-task-def.json
-      LOG_GROUP: /ecs/trupick-next
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure AWS credentials
+      - name: Configure AWS credentials (assume IAM role via OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_GITHUB_ROLE_ARN }}
+          role-session-name: gha-${{ github.run_id }}
           aws-region: ${{ env.AWS_REGION }}
+          audience: sts.amazonaws.com
+          output-env-credentials: true
+
+      - name: Verify credentials
+        run: aws sts get-caller-identity
 
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
@@ -42,7 +48,7 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Ensure ECR repository exists
+      - name: Ensure ECR repository exists (optional)
         run: |
           aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" >/dev/null 2>&1 || \
           aws ecr create-repository --repository-name "$ECR_REPOSITORY"
@@ -65,15 +71,15 @@ jobs:
           docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG
           echo "IMAGE_URI=$ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG" >> $GITHUB_ENV
 
-      - name: Ensure CloudWatch log group exists
-        run: |
-          aws logs create-log-group --log-group-name "$LOG_GROUP" || true
+      - name: Ensure CloudWatch log group exists (idempotent)
+        run: aws logs create-log-group --log-group-name "$LOG_GROUP" || true
 
       - name: Render task definition with new image
         run: |
           cat $TASK_DEF_FILE | jq \
             --arg IMAGE_URI "$IMAGE_URI" \
             '.containerDefinitions[0].image = $IMAGE_URI' > task-def-rendered.json
+          cat task-def-rendered.json
 
       - name: Register new task definition
         run: |
@@ -81,16 +87,29 @@ jobs:
             --cli-input-json file://task-def-rendered.json \
             --query 'taskDefinition.taskDefinitionArn' --output text)
           echo "TASK_DEF_ARN=$TASK_DEF_ARN" >> $GITHUB_ENV
+          echo "$TASK_DEF_ARN"
 
-      - name: Update ECS service to new task and scale to 1
+      - name: Update ECS service to new task def
         run: |
           aws ecs update-service \
             --cluster $ECS_CLUSTER \
             --service $ECS_SERVICE \
             --task-definition $TASK_DEF_ARN \
-            --desired-count 1 \
             --force-new-deployment
 
       - name: Wait for service stability
+        run: aws ecs wait services-stable --cluster $ECS_CLUSTER --services $ECS_SERVICE
+
+      # Optional: helpful diagnostics if OIDC fails early
+      - name: Confirm OIDC env is present
+        if: failure()
         run: |
-          aws ecs wait services-stable --cluster $ECS_CLUSTER --services $ECS_SERVICE
+          test -n "${ACTIONS_ID_TOKEN_REQUEST_URL}" && echo "OIDC URL OK" || (echo "No OIDC URL"; exit 1)
+          test -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" && echo "OIDC TOKEN OK" || (echo "No OIDC TOKEN"; exit 1)
+
+      - name: Show GitHub OIDC claims
+        if: failure()
+        run: |
+          TOK=$(curl -sSL -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" | jq -r .value)
+          echo "$TOK" | awk -F. '{print $2}' | tr "_-" "/+" | base64 -d 2>/dev/null | jq '{iss,sub,repository_owner,repository,ref}'
