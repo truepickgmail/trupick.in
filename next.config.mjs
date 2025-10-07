@@ -2,8 +2,7 @@
 const nextConfig = {
   reactStrictMode: true,
   typedRoutes: true,
-  output: 'export',
-  trailingSlash: true
+  output: 'standalone'
 };
 
 export default nextConfig;

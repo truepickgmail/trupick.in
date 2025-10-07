@@ -1,0 +1,16 @@
+node_modules
+npm-debug.log*
+.next/cache
+.next/dev
+.git
+.gitignore
+Dockerfile*
+README.md
+*.local
+.env*
+.vercel
+.vscode
+**/.DS_Store
+**/coverage
+**/dist
+**/build
