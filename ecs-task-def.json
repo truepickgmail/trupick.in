@@ -4,12 +4,12 @@
   "requiresCompatibilities": ["FARGATE"],
   "cpu": "512",
   "memory": "1024",
-  "executionRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
-  "taskRoleArn": "arn:aws:iam::123456789012:role/ecsTaskRole",
+  "executionRoleArn": "EXEC_ROLE_ARN_HERE",
+  "taskRoleArn": "TASK_ROLE_ARN_HERE",
   "containerDefinitions": [
     {
       "name": "web",
-      "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/trupick-next:latest",
+      "image": "123456789012.dkr.ecr.ap-south-1.amazonaws.com/trupick-next:latest",
       "essential": true,
       "portMappings": [
         { "containerPort": 3000, "hostPort": 3000, "protocol": "tcp" }
@@ -25,7 +25,7 @@
         "logDriver": "awslogs",
         "options": {
           "awslogs-group": "/ecs/trupick-next",
-          "awslogs-region": "us-east-1",
+          "awslogs-region": "ap-south-1",
           "awslogs-stream-prefix": "web"
         }
       },
