@@ -20,6 +20,8 @@ env:
   ECS_SERVICE: trupick-next-service
   TASK_DEF_FILE: ecs-task-def.json         # committed in repo (template)
   LOG_GROUP: /ecs/trupick-next
+  # Optional: set to your CFN stack name to auto-resolve names
+  CFN_STACK_NAME: trupick-next
 
 jobs:
   deploy:
@@ -86,7 +88,19 @@ jobs:
           echo "Injected ARNs:"
           grep -E '"executionRoleArn"|"taskRoleArn"' -n $TASK_DEF_FILE || true
 
-      # >>> Swap the image in the (now ARN-injected) task definition <<<
+      # >>> Optionally resolve ECS names from CloudFormation outputs <<<
+      - name: Resolve ECS names from CloudFormation (if CFN_STACK_NAME set)
+        if: env.CFN_STACK_NAME != ''
+        run: |
+          set -e
+          OUT=$(aws cloudformation describe-stacks --stack-name "$CFN_STACK_NAME" --query 'Stacks[0].Outputs' --output json)
+          CL=$(echo "$OUT" | jq -r '.[] | select(.OutputKey=="ClusterName") | .OutputValue')
+          SV=$(echo "$OUT" | jq -r '.[] | select(.OutputKey=="ServiceName") | .OutputValue')
+          if [ -n "$CL" ] && [ "$CL" != "null" ]; then echo "ECS_CLUSTER=$CL" >> $GITHUB_ENV; fi
+          if [ -n "$SV" ] && [ "$SV" != "null" ]; then echo "ECS_SERVICE=$SV" >> $GITHUB_ENV; fi
+          echo "Using ECS_CLUSTER=$(echo ${CL:-$ECS_CLUSTER})"
+          echo "Using ECS_SERVICE=$(echo ${SV:-$ECS_SERVICE})"
+
       - name: Render task definition with new image
         run: |
           cat $TASK_DEF_FILE | jq --arg IMAGE_URI "$IMAGE_URI" \
@@ -101,6 +115,15 @@ jobs:
             --query 'taskDefinition.taskDefinitionArn' --output text)
           echo "TASK_DEF_ARN=$TASK_DEF_ARN" >> $GITHUB_ENV
           echo "$TASK_DEF_ARN"
+
+      - name: Validate cluster exists
+        run: |
+          DESC=$(aws ecs describe-clusters --clusters "$ECS_CLUSTER" --query 'clusters[0].status' --output text || true)
+          if [ "$DESC" != "ACTIVE" ]; then
+            echo "Cluster not found or not ACTIVE: $ECS_CLUSTER in region $AWS_REGION" >&2
+            aws ecs list-clusters
+            exit 1
+          fi
 
       - name: Update ECS service to new task def
         run: |
